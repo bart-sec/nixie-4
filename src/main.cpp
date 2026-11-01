@@ -1,11 +1,13 @@
 // INSTRUCTION
+
 // NORMAL MODE
 // LEFT BUTTON: SHOW DATE?
+// LEFT BUTTON, LONG PRESS -> TIME SET MODE
 // RIGHT BUTTON: SHOW TEMP?
 
 // TIME SET MODE (blink digit/s that is set)
-// LEFT BUTTON: MOVE CURSOR/CONFIRM hh=>mm=>ss
-// RIGHT BUTTON: ADD HOUR/MIN/SEC
+// LEFT BUTTON: MOVE CURSOR/CONFIRM hour_l->hour_r->minute_l->minute_r
+// RIGHT BUTTON: ADD HOUR/MIN
 
 // ALARM SET MODE?
 // DISABLE DISPLAY MODE?
@@ -16,7 +18,7 @@
 
 RTC_DS3231 RTC;
 
-volatile bool time_set_mode = true;
+volatile bool time_set_mode = false;
 volatile int time_set_digit = 0;
 volatile bool schedule_shuffle;
 volatile unsigned long left_button_press_start;
@@ -24,15 +26,12 @@ volatile unsigned long right_button_press_start;
 volatile bool left_button_state = LOW;
 volatile bool right_button_state = LOW;
 
-int hour;
-int hour_l;
-int hour_r;
-int minute;
-int minute_l;
-int minute_r;
-// int second;
-// int second_l;
-// int second_r;
+volatile int hour;
+volatile int hour_l;
+volatile int hour_r;
+volatile int minute;
+volatile int minute_l;
+volatile int minute_r;
 
 const int LEFT_BUTTON = 2;  // yellow
 const int RIGHT_BUTTON = 3; // blue
@@ -57,20 +56,19 @@ const bool test = false;
 void shuffle();
 void update_current_time();
 void display_current_time();
+int cap_digit(int, int, int);
 void blink(int, int);
 void display(int, int, int, int);
 void left_button_press();
 void right_button_press();
 int map(int);
-void off(int digit);
 void off_all();
 void on_number(int, int);
-void on_number_raw(int, int);
 
 void setup() {
   Wire.begin();
   RTC.begin();
-  RTC.adjust(DateTime((__DATE__), (__TIME__)));
+  // RTC.adjust(DateTime((__DATE__), (__TIME__))); //will reset time set to rtc
 
   pinMode(LEFT_BUTTON, INPUT_PULLUP);
   pinMode(RIGHT_BUTTON, INPUT_PULLUP);
@@ -94,29 +92,11 @@ void setup() {
   pinMode(POWER_MINUTES_RIGHT, OUTPUT);
   pinMode(POWER_MINUTES_LEFT, OUTPUT);
   pinMode(LED_BUILTIN, OUTPUT);
+  digitalWrite(LED_BUILTIN, LOW);
 }
 
 void loop() {
-
   update_current_time();
-
-  // if (test) {
-  //   for (size_t i = 0; i < 10; i++) {
-  //     for (size_t j = 0; j < 10; j++) {
-  //       for (size_t k = 0; k < 10; k++) {
-  //         for (size_t l = 0; l < 10; l++) {
-  //           for (size_t o = 0; o < 2; o++) {
-  //             on_number(i, POWER_HOURS_LEFT);
-  //             on_number(j, POWER_HOURS_RIGHT);
-  //             on_number(k, POWER_MINUTES_LEFT);
-  //             on_number(l, POWER_MINUTES_RIGHT);
-  //           }
-  //         }
-  //       }
-  //     }
-  //   }
-  //   return;
-  // }
 
   if (time_set_mode) {
     blink(time_set_digit, 50);
@@ -128,11 +108,8 @@ void loop() {
     return;
   }
 
-  if (time_set_mode) {
-  }
-
   if (left_button_press_start) {
-    if (millis() - left_button_press_start > 2000) {
+    if (millis() - left_button_press_start > 1000) {
       time_set_mode = true;
       time_set_digit = 1;
     }
@@ -143,11 +120,14 @@ void loop() {
 }
 
 void update_current_time() {
+  if (time_set_mode) {
+    RTC.adjust(DateTime(2026, 11, 1, hour_l * 10 + hour_r,
+                        minute_l * 10 + minute_r, 0));
+    return;
+  }
+
   DateTime now = RTC.now();
 
-  // second = now.second();
-  // int second_r = second % 10;
-  // int second_l = second / 10;
   int current_minute = now.minute();
   if (current_minute > minute)
     schedule_shuffle = true;
@@ -168,26 +148,33 @@ void display_current_time() {
   on_number(minute_r, POWER_MINUTES_RIGHT);
 }
 
-// int map_row(int digit) {
-//   switch (digit) {
-//   case 1:
-//     return POWER_HOURS_LEFT;
-//   }
-// }
 void blink(int digit, int interval) {
   for (size_t i = 0; i < interval; i++) {
     display_current_time();
-    // if (!time_set_mode)
-    //   return;
+    if (!time_set_mode || digit != time_set_digit)
+      return;
   }
 
   for (size_t i = 0; i < interval; i++) {
-    // off(2);
-    // off_all();
-    display(-1, hour_r, minute_l, minute_r);
-    delay(4);
-    // if (!time_set_mode)
-    //   return;
+    switch (digit) {
+    case 1:
+      display(-1, hour_r, minute_l, minute_r);
+      break;
+    case 2:
+      display(hour_l, -1, minute_l, minute_r);
+      break;
+    case 3:
+      display(hour_l, hour_r, -1, minute_r);
+      break;
+    case 4:
+      display(hour_l, hour_r, minute_l, -1);
+      break;
+    default:
+      display(-1, -1, -1, -1);
+    }
+
+    if (!time_set_mode || digit != time_set_digit)
+      return;
   }
 }
 
@@ -217,16 +204,17 @@ void shuffle() {
     display(max(i, hour_l), hour_r, minute_l, minute_r);
     delay(10);
   }
-  // for (size_t i = 10; i > 0; i--) {
-  //
-  //   display(max(i, hour_l), max(i, hour_r), max(i, minute_l), max(i,
-  //   minute_r)); delay(20);
-  // }
+
   schedule_shuffle = false;
   return;
 }
 
 void display(int number1, int number2, int number3, int number4) {
+  if (number1 < 0 && number2 < 0 && number3 < 0 && number4 < 0) {
+    off_all();
+    delay(4);
+    return;
+  }
   if (number1 >= 0)
     on_number(number1, POWER_HOURS_LEFT);
   if (number2 >= 0)
@@ -245,27 +233,6 @@ void on_number(int digit, int row) {
   delay(1);
 }
 
-// not used
-void on_number_raw(int nixie, int row) {
-  off_all();
-  digitalWrite(nixie, HIGH);
-  digitalWrite(row, HIGH);
-}
-
-void off(int digit) {
-
-  if (digit == 1)
-    digitalWrite(POWER_HOURS_LEFT, LOW);
-  if (digit == 2)
-    digitalWrite(POWER_HOURS_RIGHT, LOW);
-  if (digit == 3)
-    digitalWrite(POWER_MINUTES_LEFT, LOW);
-  if (digit == 4)
-    digitalWrite(POWER_MINUTES_RIGHT, LOW);
-
-  delayMicroseconds(420); // to prevent "ghost" effect to other tube
-}
-
 void off_all() {
   digitalWrite(nixie_0, LOW);
   digitalWrite(nixie_1, LOW);
@@ -281,7 +248,7 @@ void off_all() {
   digitalWrite(POWER_HOURS_LEFT, LOW);
   digitalWrite(POWER_MINUTES_RIGHT, LOW);
   digitalWrite(POWER_MINUTES_LEFT, LOW);
-  delayMicroseconds(420); // to prevent "ghost" effect to other tube
+  delay(1);
 }
 
 int map(int digit) {
@@ -314,12 +281,14 @@ int map(int digit) {
 
 void left_button_press() {
   left_button_state = digitalRead(LEFT_BUTTON);
-  if (time_set_mode && time_set_digit >= 4) {
-    time_set_mode = false;
-    time_set_digit = 0;
-  }
-  if (time_set_mode) {
-    time_set_digit++;
+
+  if (time_set_mode && left_button_state) {
+    if (time_set_digit >= 4) {
+      time_set_mode = false;
+      time_set_digit = 0;
+    } else {
+      time_set_digit++;
+    }
   }
 
   if (!left_button_state) {
@@ -329,10 +298,34 @@ void left_button_press() {
 
 void right_button_press() {
   right_button_state = digitalRead(RIGHT_BUTTON);
-  if (time_set_mode) {
-    time_set_mode = false;
+  if (time_set_mode && right_button_state) {
+    switch (time_set_digit) {
+    case 1:
+      hour_l++;
+      break;
+    case 2:
+      hour_r++;
+      break;
+    case 3:
+      minute_l++;
+      break;
+    case 4:
+      minute_r++;
+      break;
+    }
+    hour_l = cap_digit(hour_l, 1, 2);
+    hour_r = cap_digit(hour_r, 0, hour_l == 2 ? 3 : 9);
+    minute_l = cap_digit(minute_l, 0, 5);
+    minute_r = cap_digit(minute_r, 0, 9);
   }
+
   if (!right_button_state) {
     right_button_press_start = 0;
   }
+}
+
+int cap_digit(int digit, int min, int max) {
+  if (digit > max)
+    return min;
+  return digit;
 }
